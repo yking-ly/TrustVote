@@ -14,6 +14,14 @@ dist/
 dist-ssr/
 build/
 
+# Hardhat
+artifacts/
+cache/
+typechain-types/
+
+# Binaries
+*.exe
+
 # Python
 __pycache__/
 *.pyc

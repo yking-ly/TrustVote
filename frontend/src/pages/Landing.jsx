@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, Vote, Zap, Code, ChevronRight, Lock } from 'lucide-react';
+import { ShieldCheck, Vote, Zap, ChevronRight, Lock, Smartphone } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export default function Landing({ connectWallet, account }) {
@@ -38,16 +38,6 @@ export default function Landing({ connectWallet, account }) {
             <span className="relative">{account ? 'Enter Dashboard' : 'Connect Wallet to Start'}</span>
             <ChevronRight className="w-5 h-5 relative group-hover:translate-x-1 transition-transform" />
           </button>
-          
-          <a
-            href="https://github.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-8 py-4 glass-card rounded-2xl font-semibold text-lg transition-all hover:bg-white/5 flex items-center gap-2 border border-gray-700"
-          >
-            <Code className="w-5 h-5 text-gray-300" />
-            <span>View Source</span>
-          </a>
         </div>
       </main>
 
@@ -66,11 +56,11 @@ export default function Landing({ connectWallet, account }) {
 
           <div className="glass-panel p-8 rounded-3xl hover:-translate-y-2 transition-transform duration-300 group">
             <div className="w-14 h-14 rounded-2xl bg-purple-500/10 flex items-center justify-center mb-6 group-hover:bg-purple-500/20 transition-colors">
-              <ShieldCheck className="w-7 h-7 text-purple-400" />
+              <Smartphone className="w-7 h-7 text-purple-400" />
             </div>
-            <h3 className="text-xl font-bold mb-3">Multi-Factor Auth</h3>
+            <h3 className="text-xl font-bold mb-3">Phone OTP Verification</h3>
             <p className="text-gray-400 text-sm font-sans leading-relaxed">
-              Combining Web3 wallet signatures with traditional email OTP verification to prevent duplicate votes and sybil attacks.
+              Multi-factor authentication with SMS OTP and wallet signatures ensures one vote per verified phone number, preventing duplicates.
             </p>
           </div>
 

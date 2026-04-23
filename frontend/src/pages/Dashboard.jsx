@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Users, ShieldCheck, Mail, AlertCircle, RefreshCw, Lock } from 'lucide-react';
+import { ethers } from 'ethers';
+import { Users, ShieldCheck, Smartphone, AlertCircle, RefreshCw, Lock, SendHorizonal, KeyRound, CheckCircle2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export default function Dashboard({ 
@@ -8,7 +9,7 @@ export default function Dashboard({
   candidates, 
   votingOpen, 
   isAdmin, 
-  hasVoted, 
+  electionId,
   fetchData,
   BACKEND_URL 
 }) {
@@ -16,18 +17,20 @@ export default function Dashboard({
   const [activeTab, setActiveTab] = useState('vote'); // 'vote' or 'admin'
   const [selectedCandidate, setSelectedCandidate] = useState(null);
   
-  // OTP State
-  const [email, setEmail] = useState("");
-  const [otp, setOtp] = useState("");
+  // Phone OTP State
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [otp, setOtp] = useState('');
   const [otpSent, setOtpSent] = useState(false);
-  const [otpVerified, setOtpVerified] = useState(false);
   
   // Admin State
   const [newCandidateName, setNewCandidateName] = useState("");
   
+  // UI State
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [localHasVoted, setLocalHasVoted] = useState(false);
+  const [step, setStep] = useState(1); // 1: phone, 2: otp, 3: vote
 
   // Determine winner(s) if voting is closed and there are votes
   const maxVotes = candidates.length > 0 ? Math.max(...candidates.map(c => c.voteCount)) : 0;
@@ -54,46 +57,89 @@ export default function Dashboard({
   // --- Actions ---
 
   const sendOtp = async () => {
+    if (!phoneNumber) return setError("Please enter your phone number.");
     setLoading(true); setError(""); setSuccess("");
     try {
       const res = await fetch(`${BACKEND_URL}/api/send-otp`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email })
+        body: JSON.stringify({ phoneNumber })
       });
       const data = await res.json();
       if (data.success) {
-        setOtpSent(true); setSuccess("OTP Sent! Check your email.");
-      } else setError(data.message || "Failed to send OTP.");
-    } catch (err) { setError("Network error while sending OTP."); }
-    setLoading(false);
-  };
+        setOtpSent(true);
+        setStep(2);
+        setSuccess("OTP sent! Check your phone for the verification code.");
 
-  const verifyOtp = async () => {
-    setLoading(true); setError(""); setSuccess("");
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/verify-otp`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, otp })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setOtpVerified(true); setSuccess("Verified! You can now cast your vote.");
-      } else setError(data.message || "Invalid OTP.");
-    } catch (err) { setError("Network error verifying OTP."); }
+        // Check if this phone already voted
+        try {
+          const phoneHash = ethers.keccak256(ethers.toUtf8Bytes(phoneNumber));
+          const voted = await contract.hasVoted(phoneHash);
+          if (voted) {
+            setLocalHasVoted(true);
+            setError("This phone number has already been used to vote in this election.");
+            setSuccess("");
+          }
+        } catch (err) {
+          console.error("Failed to check vote status:", err);
+        }
+      } else {
+        setError(data.message || "Failed to send OTP.");
+      }
+    } catch (err) {
+      setError("Network error while sending OTP. Is the backend running?");
+    }
     setLoading(false);
   };
 
   const castVote = async () => {
     if (!selectedCandidate) return setError("Please select a candidate.");
+    if (!otp) return setError("Please enter the OTP code.");
+    if (!phoneNumber) return setError("Phone number is missing.");
+
     setLoading(true); setError(""); setSuccess("");
     try {
-      const tx = await contract.castVote(selectedCandidate);
-      setSuccess("Transaction sent! Waiting for confirmation...");
+      // Step 1: Verify OTP + get backend signature
+      setSuccess("Verifying OTP...");
+      const res = await fetch(`${BACKEND_URL}/api/verify-and-sign`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phoneNumber,
+          otp,
+          candidateId: selectedCandidate,
+          electionId
+        })
+      });
+      const data = await res.json();
+      
+      if (!data.success) {
+        setSuccess("");
+        return setError(data.message || "OTP verification failed.");
+      }
+
+      // Step 2: Call smart contract with the signed authorization
+      setSuccess("OTP verified! Submitting vote to blockchain...");
+      const tx = await contract.castVote(
+        selectedCandidate,
+        data.phoneHash,
+        data.signature
+      );
+      
+      setSuccess("Transaction submitted! Waiting for confirmation...");
       await tx.wait();
-      setSuccess("Vote cast successfully!");
+      
+      setLocalHasVoted(true);
+      setSuccess("🎉 Vote cast successfully! Your vote is permanently recorded on the blockchain.");
       await fetchData(contract, account);
     } catch (err) {
-      console.error(err); setError("Failed to cast vote. See console.");
+      console.error(err);
+      if (err.reason) {
+        setError(err.reason);
+      } else if (err.message?.includes("already voted")) {
+        setError("This phone number has already voted in this election.");
+        setLocalHasVoted(true);
+      } else {
+        setError("Failed to cast vote. Check the console for details.");
+      }
     }
     setLoading(false);
   };
@@ -140,10 +186,19 @@ export default function Dashboard({
     setLoading(false);
   };
 
+  const resetPhoneFlow = () => {
+    setPhoneNumber('');
+    setOtp('');
+    setOtpSent(false);
+    setStep(1);
+    setError('');
+    setSuccess('');
+  };
+
   // --- Views ---
 
   return (
-    <div className="max-w-6xl mx-auto px-4 pb-24 fade-in">
+    <div className="max-w-6xl mx-auto px-4 pb-24">
       
       <div className="flex flex-col md:flex-row justify-between items-end mb-8 border-b border-white/10 pb-6 gap-6">
         <div>
@@ -233,12 +288,12 @@ export default function Dashboard({
                   {candidates.map(c => (
                     <div 
                       key={c.id}
-                      onClick={() => !hasVoted && votingOpen && setSelectedCandidate(c.id)}
+                      onClick={() => !localHasVoted && votingOpen && setSelectedCandidate(c.id)}
                       className={`p-5 rounded-2xl transition-all duration-300 relative overflow-hidden ${
                         selectedCandidate === c.id 
                         ? 'border-indigo-500 bg-indigo-500/10 shadow-[0_0_30px_-10px_rgba(79,70,229,0.3)] border' 
                         : 'border border-white/5 bg-white/5 hover:bg-white/10 cursor-pointer'
-                      } ${hasVoted || !votingOpen ? 'opacity-50 cursor-not-allowed grayscale' : ''}`}
+                      } ${localHasVoted || !votingOpen ? 'opacity-50 cursor-not-allowed grayscale' : ''}`}
                     >
                       {selectedCandidate === c.id && (
                         <div className="absolute left-0 top-0 bottom-0 w-1 bg-indigo-500 shadow-[0_0_10px_rgba(79,70,229,0.8)]"></div>
@@ -249,8 +304,17 @@ export default function Dashboard({
                           <p className="text-xs text-gray-400 font-sans font-medium tracking-wider">CANDIDATE #{c.id}</p>
                         </div>
                         <div className="text-right bg-black/40 px-4 py-2 rounded-xl border border-white/5">
-                          <span className="block text-2xl font-black text-white">{c.voteCount}</span>
-                          <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Votes</span>
+                          {!votingOpen || isAdmin ? (
+                            <>
+                              <span className="block text-2xl font-black text-white">{c.voteCount}</span>
+                              <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Votes</span>
+                            </>
+                          ) : (
+                            <>
+                              <Lock className="w-5 h-5 text-gray-600 mx-auto mb-0.5" />
+                              <span className="text-[10px] text-gray-600 uppercase tracking-widest font-bold">Hidden</span>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -260,8 +324,8 @@ export default function Dashboard({
             </div>
           </div>
 
-          <div className="lg:col-span-5">
-            <div className="glass-panel p-8 rounded-3xl sticky top-24 border border-white/10">
+          <div className="lg:col-span-5 relative z-[60]">
+            <div className="bg-[#0b0f19]/95 p-8 rounded-3xl sticky top-24 border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)]">
               <h2 className="text-xl font-bold mb-6 pb-4 border-b border-white/5">Digital Ballot</h2>
               
               {!votingOpen ? (
@@ -280,7 +344,7 @@ export default function Dashboard({
                   <h3 className="text-xl font-bold text-purple-400 mb-2">Admin Account</h3>
                   <p className="text-gray-400 font-sans text-sm">Administrators cannot participate in the vote.</p>
                 </div>
-              ) : hasVoted ? (
+              ) : localHasVoted ? (
                 <div className="py-12 text-center flex flex-col items-center animate-in zoom-in">
                   <div className="w-20 h-20 bg-green-500/10 rounded-full flex items-center justify-center mb-6 shadow-[0_0_30px_-5px_rgba(34,197,94,0.3)] border border-green-500/30">
                     <ShieldCheck className="w-10 h-10 text-green-400" />
@@ -290,72 +354,126 @@ export default function Dashboard({
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {!otpVerified ? (
-                    <div className="space-y-5 animate-in fade-in">
-                      <div>
-                        <label className="block text-sm font-semibold text-gray-300 mb-3 tracking-wide">1. Identity Verification</label>
-                        <div className="relative">
-                          <Mail className="absolute left-4 top-3.5 w-5 h-5 text-gray-500" />
-                          <input 
-                            type="email" 
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            disabled={otpSent}
-                            placeholder="Enter your registered email"
-                            className="w-full bg-black/40 border border-white/10 rounded-xl pl-12 pr-4 py-3.5 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all shadow-inner disabled:opacity-50 font-sans"
-                          />
+                  {/* Step Progress Indicator */}
+                  <div className="flex items-center justify-between mb-2">
+                    {[1, 2, 3].map(s => (
+                      <div key={s} className="flex items-center gap-2 flex-1">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
+                          step >= s 
+                            ? 'bg-indigo-600 text-white shadow-[0_0_15px_rgba(79,70,229,0.4)]' 
+                            : 'bg-white/5 text-gray-500 border border-white/10'
+                        }`}>
+                          {step > s ? <CheckCircle2 className="w-4 h-4" /> : s}
+                        </div>
+                        {s < 3 && (
+                          <div className={`flex-1 h-0.5 rounded transition-all duration-300 ${step > s ? 'bg-indigo-500' : 'bg-white/10'}`}></div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex justify-between text-[10px] text-gray-500 uppercase tracking-widest font-bold mb-4 px-1">
+                    <span>Phone</span>
+                    <span>Verify</span>
+                    <span>Vote</span>
+                  </div>
+
+                  {/* Step 1: Phone Number */}
+                  {step === 1 && (
+                    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
+                      <label className="block text-sm font-semibold text-gray-300 tracking-wide">
+                        <Smartphone className="w-4 h-4 inline mr-2 text-indigo-400" />
+                        Phone Verification
+                      </label>
+                      <p className="text-xs text-gray-500 font-sans">Enter your phone number in international format to receive a verification code via SMS.</p>
+                      <input
+                        type="tel"
+                        value={phoneNumber}
+                        onChange={e => setPhoneNumber(e.target.value)}
+                        placeholder="+919876543210"
+                        className="w-full bg-black/50 border border-white/10 rounded-xl px-5 py-3.5 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all font-mono text-lg tracking-wider placeholder:text-gray-600"
+                      />
+                      <button
+                        onClick={sendOtp}
+                        disabled={loading || !phoneNumber}
+                        className="w-full py-3.5 rounded-xl font-bold transition-all flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_20px_-5px_rgba(79,70,229,0.4)]"
+                      >
+                        {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <SendHorizonal className="w-4 h-4" />}
+                        Send OTP
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Step 2: OTP Entry */}
+                  {step === 2 && !localHasVoted && (
+                    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
+                      <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-3 flex items-start gap-3">
+                        <Smartphone className="w-4 h-4 text-indigo-400 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <p className="text-indigo-300 text-sm font-semibold">OTP sent to {phoneNumber}</p>
+                          <button onClick={resetPhoneFlow} className="text-xs text-indigo-400/60 hover:text-indigo-300 transition-colors mt-1 underline">Change number</button>
                         </div>
                       </div>
+
+                      <label className="block text-sm font-semibold text-gray-300 tracking-wide">
+                        <KeyRound className="w-4 h-4 inline mr-2 text-indigo-400" />
+                        Enter 6-Digit Code
+                      </label>
+                      <input
+                        type="text"
+                        value={otp}
+                        onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder="● ● ● ● ● ●"
+                        maxLength={6}
+                        className="w-full bg-black/50 border border-white/10 rounded-xl px-5 py-4 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all font-mono text-2xl tracking-[0.5em] text-center placeholder:text-gray-600 placeholder:tracking-[0.3em] placeholder:text-lg"
+                      />
                       
-                      {!otpSent ? (
-                        <button 
-                          onClick={sendOtp}
-                          disabled={loading || !email}
-                          className="w-full py-3.5 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-indigo-500/50 rounded-xl font-semibold transition-all disabled:opacity-50 flex justify-center items-center gap-2 group"
+                      {otp.length === 6 && (
+                        <button
+                          onClick={() => setStep(3)}
+                          className="w-full py-3.5 rounded-xl font-bold transition-all flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500"
                         >
-                          {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Request Authenticator Code'}
+                          <CheckCircle2 className="w-4 h-4" />
+                          Continue to Vote
                         </button>
-                      ) : (
-                        <div className="space-y-4 pt-5 pb-2 animate-in slide-in-from-top-2">
-                          <p className="text-xs text-indigo-400 font-medium tracking-wide">Enter the 6-digit code sent to your email.</p>
-                          <input 
-                            type="text" 
-                            value={otp}
-                            onChange={(e) => setOtp(e.target.value)}
-                            placeholder="• • • • • •"
-                            className="w-full bg-black/40 border border-white/10 rounded-xl text-center tracking-[1em] text-2xl px-4 py-4 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all font-mono"
-                            maxLength={6}
-                          />
-                          <button 
-                            onClick={verifyOtp}
-                            disabled={loading || otp.length !== 6}
-                            className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-bold text-lg transition-all shadow-[0_0_20px_-5px_rgba(79,70,229,0.4)] disabled:opacity-50"
-                          >
-                            Verify Identity
-                          </button>
-                        </div>
                       )}
+
+                      <button
+                        onClick={sendOtp}
+                        disabled={loading}
+                        className="w-full text-center text-xs text-gray-500 hover:text-indigo-400 transition-colors py-2 font-sans"
+                      >
+                        Didn't receive it? Resend OTP
+                      </button>
                     </div>
-                  ) : (
-                    <div className="space-y-6 animate-in zoom-in-95">
+                  )}
+
+                  {/* Step 3: Cast Vote */}
+                  {step === 3 && (
+                    <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4">
                       <div className="bg-green-500/10 border border-green-500/30 rounded-xl p-4 flex items-start gap-3">
-                        <ShieldCheck className="w-5 h-5 text-green-400 mt-0.5" />
+                        <CheckCircle2 className="w-5 h-5 text-green-400 mt-0.5" />
                         <div>
-                          <p className="text-green-400 font-bold mb-1">Identity Verified</p>
-                          <p className="text-green-500/70 text-xs font-sans">Your cryptographic signature is ready to be applied.</p>
+                          <p className="text-green-400 font-bold text-sm">Phone verified: {phoneNumber}</p>
+                          <p className="text-green-500/70 text-xs font-sans">OTP ready. Select a candidate and cast your vote.</p>
                         </div>
                       </div>
                       
                       <div className="pt-2">
-                        <label className="block text-sm font-semibold text-gray-300 mb-4 tracking-wide">2. Commit Vote</label>
+                        <label className="block text-sm font-semibold text-gray-300 mb-4 tracking-wide">Cast Your Ballot</label>
                         <button 
                           onClick={castVote}
                           disabled={loading || !selectedCandidate}
                           className="relative w-full overflow-hidden group py-4 rounded-xl font-bold text-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-white/5 border border-white/10"
                         >
                           <div className={`absolute inset-0 transition-opacity duration-300 ${selectedCandidate ? 'opacity-100' : 'opacity-0'} bg-gradient-to-r from-indigo-600 to-purple-600`}></div>
-                          <span className="relative z-10 block font-sans">
-                            {selectedCandidate ? 'Sign & Cast Ballot' : 'Waiting for Selection...'}
+                          <span className="relative z-10 block font-sans flex items-center justify-center gap-2">
+                            {loading ? (
+                              <><RefreshCw className="w-5 h-5 animate-spin" /> Processing...</>
+                            ) : selectedCandidate ? (
+                              'Sign & Cast Ballot'
+                            ) : (
+                              'Waiting for Selection...'
+                            )}
                           </span>
                         </button>
                         {!selectedCandidate && <p className="text-center text-xs text-gray-500 mt-4 font-sans">Please select a candidate from the list to proceed.</p>}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
-import { Vote, ShieldCheck, Wallet, LogOut } from 'lucide-react';
+import { Vote, ShieldCheck, Wallet } from 'lucide-react';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 
 import Landing from './pages/Landing';
@@ -11,11 +11,13 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
 
 const ABI = [
   "function admin() public view returns (address)",
+  "function backendSigner() public view returns (address)",
   "function votingOpen() public view returns (bool)",
+  "function currentElectionId() public view returns (uint256)",
   "function candidatesCount() public view returns (uint256)",
-  "function hasVoted(address) public view returns (bool)",
+  "function hasVoted(bytes32) public view returns (bool)",
   "function getCandidate(uint256 _candidateId) public view returns (uint256, string memory, uint256)",
-  "function castVote(uint256 _candidateId) public",
+  "function castVote(uint256 _candidateId, bytes32 _phoneHash, bytes calldata _signature) public",
   "function setVotingStatus(bool _isOpen) public",
   "function addCandidate(string memory _name) public",
   "function resetElection() public"
@@ -29,7 +31,7 @@ function AppContent() {
   const [candidates, setCandidates] = useState([]);
   const [votingOpen, setVotingOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [hasVoted, setHasVoted] = useState(false);
+  const [electionId, setElectionId] = useState(1);
   
   const location = useLocation();
 
@@ -73,9 +75,9 @@ function AppContent() {
       
       const isOpen = await contractInstance.votingOpen();
       setVotingOpen(isOpen);
-      
-      const voted = await contractInstance.hasVoted(userAccount);
-      setHasVoted(voted);
+
+      const currentId = await contractInstance.currentElectionId();
+      setElectionId(Number(currentId));
 
       const count = await contractInstance.candidatesCount();
       const loadedCandidates = [];
@@ -165,7 +167,7 @@ function AppContent() {
                 candidates={candidates}
                 votingOpen={votingOpen}
                 isAdmin={isAdmin}
-                hasVoted={hasVoted}
+                electionId={electionId}
                 fetchData={fetchData}
                 BACKEND_URL={BACKEND_URL}
               />
